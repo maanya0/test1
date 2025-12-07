@@ -118,7 +118,7 @@ in
   # ============================================
   # INTEL HARDWARE ACCELERATION (QSV for Skylake)
   # ============================================
-  hardware.graphics = {
+  hardware.opengl = {
     enable = true;
     extraPackages = with pkgs; [
       intel-media-driver    # VAAPI driver for Intel (Broadwell+)

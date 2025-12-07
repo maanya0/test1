@@ -1,4 +1,4 @@
-{ pkgs, lib, self, ... }:
+{ pkgs, lib, ... }:
 
 let
   sshKeys = [
@@ -14,40 +14,201 @@ in
   # Recommended: set system.stateVersion for reproducible behaviour
   system.stateVersion = "24.05";
 
-  # Enable SSH so we can log in
-  services.openssh.enable = true;
+  # ============================================
+  # NIX CONFIGURATION (Optimized for native app installs)
+  # ============================================
+  nix = {
+    settings = {
+      # Enable flakes and nix-command
+      experimental-features = [ "nix-command" "flakes" ];
+      
+      # Allow unfree packages (for things like Plex, etc.)
+      # Note: Also needs nixpkgs.config.allowUnfree = true;
+      
+      # Binary caches for faster downloads (avoid compiling)
+      substituters = [
+        "https://cache.nixos.org"
+        "https://nix-community.cachix.org"
+        "https://cache.garnix.io"
+      ];
+      trusted-public-keys = [
+        "cache.nixos.org-1:6NCHdD59X431o0gWypbMrAURkbJ16ZPMQFGspcDShjY="
+        "nix-community.cachix.org-1:mB9FSh9qf2dCimDSUo8Zy7bkq5CX+/rkCWyvRCYg3Fs="
+        "cache.garnix.io:CTFPyKSLcx5RMJKfLo5EEPUObbA78b0YQ2DTCJXqr9g="
+      ];
+      
+      # Trust wheel users for remote builds
+      trusted-users = [ "root" "@wheel" ];
+      
+      # Store optimization
+      auto-optimise-store = true;
+      keep-outputs = true;
+      keep-derivations = true;
+      
+      # Faster downloads
+      max-jobs = "auto";
+      cores = 0;  # Use all cores
+    };
+    
+    # Garbage collection
+    gc = {
+      automatic = true;
+      dates = "weekly";
+      options = "--delete-older-than 14d";
+    };
+  };
 
-  # User 'me' with sudo access
+  # Allow unfree packages (Plex, Spotify, etc.)
+  nixpkgs.config.allowUnfree = true;
+
+  # ============================================
+  # SSH CONFIGURATION
+  # ============================================
+  services.openssh = {
+    enable = true;
+    settings = {
+      PermitRootLogin = "no";
+      PasswordAuthentication = false;
+    };
+  };
+
+  # ============================================
+  # USER CONFIGURATION
+  # ============================================
   users.users.me = {
     isNormalUser = true;
     description = "me";
-    extraGroups = [ "wheel" "systemd-journal" "docker" ];
+    extraGroups = [ "wheel" "systemd-journal" "docker" "media" ];
     openssh.authorizedKeys.keys = sshKeys;
   };
 
-  # Create docker group
   users.groups = {
     docker = {};
+    media = {};  # Shared group for media apps
   };
 
-  # Allow sudo without password
   security.sudo.wheelNeedsPassword = false;
 
-  # Packages available on the system
-  environment.systemPackages = [
-    pkgs.htop
-    pkgs.tree
-    pkgs.docker
-    pkgs.docker-compose
+  # ============================================
+  # SYSTEM PACKAGES
+  # ============================================
+  environment.systemPackages = with pkgs; [
+    # System utilities
+    htop
+    btop           # Better htop
+    iotop
+    tree
+    ncdu
+    tmux
+    curl
+    wget
+    git            # For managing configs
+    neovim         # Editor
+    
+    # Docker (fallback option)
+    docker
+    docker-compose
+    
+    # Useful for native apps
+    ffmpeg         # Media transcoding
+    mediainfo      # Media file analysis
   ];
 
-  # Docker configuration
+  # ============================================
+  # NATIVE NIXOS SERVICES (Examples - uncomment to enable)
+  # ============================================
+  
+  # --- JELLYFIN (Media Server) ---
+  # services.jellyfin = {
+  #   enable = true;
+  #   openFirewall = true;
+  #   user = "jellyfin";
+  #   group = "media";
+  # };
+  
+  # --- SONARR (TV Show Management) ---
+  # services.sonarr = {
+  #   enable = true;
+  #   openFirewall = true;
+  #   group = "media";
+  # };
+  
+  # --- RADARR (Movie Management) ---
+  # services.radarr = {
+  #   enable = true;
+  #   openFirewall = true;
+  #   group = "media";
+  # };
+  
+  # --- PROWLARR (Indexer Manager) ---
+  # services.prowlarr = {
+  #   enable = true;
+  #   openFirewall = true;
+  # };
+  
+  # --- TRANSMISSION (Torrent Client) ---
+  # services.transmission = {
+  #   enable = true;
+  #   openFirewall = true;
+  #   group = "media";
+  #   settings = {
+  #     download-dir = "/var/lib/transmission/downloads";
+  #     incomplete-dir = "/var/lib/transmission/incomplete";
+  #     rpc-whitelist-enabled = false;
+  #   };
+  # };
+  
+  # --- NGINX (Reverse Proxy) ---
+  # services.nginx = {
+  #   enable = true;
+  #   recommendedProxySettings = true;
+  #   recommendedTlsSettings = true;
+  #   recommendedGzipSettings = true;
+  #   recommendedOptimisation = true;
+  # };
+  
+  # --- CADDY (Alternative Reverse Proxy - simpler HTTPS) ---
+  # services.caddy = {
+  #   enable = true;
+  #   # Automatic HTTPS
+  # };
+  
+  # --- POSTGRESQL (Database) ---
+  # services.postgresql = {
+  #   enable = true;
+  #   package = pkgs.postgresql_16;
+  # };
+  
+  # --- REDIS (Cache) ---
+  # services.redis.servers."default" = {
+  #   enable = true;
+  #   port = 6379;
+  # };
+
+  # ============================================
+  # DOCKER (Fallback for apps without NixOS modules)
+  # ============================================
   virtualisation.docker = {
     enable = true;
-    liveRestore = false; # disable live-restore for EasyPanel compatibility
+    liveRestore = false;
+    autoPrune = {
+      enable = true;
+      dates = "weekly";
+      flags = [ "--all" "--volumes" ];
+    };
+    daemon.settings = {
+      storage-driver = "overlay2";
+      log-driver = "json-file";
+      log-opts = {
+        max-size = "10m";
+        max-file = "3";
+      };
+      default-ulimits = {
+        nofile = { Name = "nofile"; Hard = 65536; Soft = 65536; };
+      };
+    };
   };
 
-  # Ensure /var/run/docker.sock is readable by docker group
   systemd.services."docker" = {
     serviceConfig = {
       ExecStartPost = [
@@ -57,7 +218,68 @@ in
     };
   };
 
-  # Disable firewall entirely (opens all ports)
+  # ============================================
+  # KERNEL & MEMORY OPTIMIZATION
+  # ============================================
+  boot.kernel.sysctl = {
+    # Memory management
+    "vm.swappiness" = 10;
+    "vm.vfs_cache_pressure" = 50;
+    "vm.dirty_ratio" = 15;
+    "vm.dirty_background_ratio" = 5;
+    "vm.oom_kill_allocating_task" = 1;
+
+    # Network tuning for streaming
+    "net.core.rmem_max" = 16777216;
+    "net.core.wmem_max" = 16777216;
+    "net.core.rmem_default" = 1048576;
+    "net.core.wmem_default" = 1048576;
+    "net.core.optmem_max" = 65536;
+    "net.core.somaxconn" = 65535;
+    "net.core.netdev_max_backlog" = 65536;
+    "net.ipv4.tcp_rmem" = "4096 1048576 16777216";
+    "net.ipv4.tcp_wmem" = "4096 1048576 16777216";
+    "net.ipv4.tcp_max_syn_backlog" = 65536;
+    "net.ipv4.tcp_tw_reuse" = 1;
+    "net.ipv4.tcp_fin_timeout" = 15;
+    "net.ipv4.tcp_keepalive_time" = 300;
+    "net.ipv4.tcp_keepalive_probes" = 5;
+    "net.ipv4.tcp_keepalive_intvl" = 15;
+
+    # File handles
+    "fs.file-max" = 2097152;
+    "fs.inotify.max_user_watches" = 524288;
+    "fs.inotify.max_user_instances" = 512;
+  };
+
+  # ============================================
+  # LOGGING
+  # ============================================
+  services.journald.extraConfig = ''
+    SystemMaxUse=500M
+    SystemMaxFileSize=50M
+    MaxRetentionSec=1week
+    Compress=yes
+  '';
+
+  # ============================================
+  # TIME SYNC
+  # ============================================
+  services.timesyncd.enable = true;
+
+  # ============================================
+  # SECURITY LIMITS
+  # ============================================
+  security.pam.loginLimits = [
+    { domain = "*"; type = "soft"; item = "nofile"; value = "65536"; }
+    { domain = "*"; type = "hard"; item = "nofile"; value = "65536"; }
+    { domain = "*"; type = "soft"; item = "nproc"; value = "65536"; }
+    { domain = "*"; type = "hard"; item = "nproc"; value = "65536"; }
+  ];
+
+  # ============================================
+  # NETWORKING
+  # ============================================
   networking.firewall.enable = false;
 
   # Required for Garnix

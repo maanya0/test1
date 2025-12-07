@@ -1,15 +1,32 @@
-# template-typescript-go
+# Garnix Server
 
-A garnix-compatible repo configuring an example server with a typescript
-frontend and a go backend. You can see this repo deployed
-[here](http://server.main.template-typescript-go.garnix-io.garnix.me/).
+A NixOS server deployed via [Garnix](https://garnix.io) with Docker support and optimizations for self-hosted apps.
 
-To deploy this on garnix:
+## Features
 
-1) Create a [garnix](https://garnix.io) account if you don't have one yet.
-2) Fork this repo.
-3) Make sure the garnix GitHub App is enabled on this repo.
-4) [Optional] Add your public ssh key in [./hosts/server.nix](https://github.com/garnix-io/template-typescript-go/blob/main/hosts/server.nix). This will allow you to ssh into your deployed host.
-5) Push your changes! garnix will build and deploy the package, and make your
-   server available on a `garnix.me` domain.
-   
+- **Docker & Docker Compose** - For containerized apps
+- **Native NixOS services** - Pre-configured for Jellyfin, Sonarr, Radarr, etc.
+- **Optimized for media streaming** - Network/memory tuning for apps like Jellyfin
+- **Binary caches** - Fast package downloads (no compiling)
+- **Persistent storage** - Data survives redeployments
+
+## Deployment
+
+1. Create a [Garnix](https://garnix.io) account
+2. Fork/clone this repo
+3. Enable the Garnix GitHub App on your repo
+4. Update SSH key in [`hosts/server.nix`](./hosts/server.nix)
+5. Push to `main` branch - Garnix will deploy automatically!
+
+## Configuration
+
+Edit `hosts/server.nix` to:
+- Add system packages
+- Enable native NixOS services (uncomment the examples)
+- Adjust Docker settings
+
+## SSH Access
+
+```bash
+ssh me@server.main.<your-repo>.<your-user>.garnix.me
+```

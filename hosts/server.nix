@@ -9,7 +9,7 @@ in
   # Garnix server setup
   garnix.server.enable = true;
   garnix.server.persistence.enable = true;
-  garnix.server.persistence.name = "server15";
+  garnix.server.persistence.name = "coolify";
 
   # Recommended: set system.stateVersion for reproducible behaviour
   system.stateVersion = "24.05";
@@ -67,7 +67,8 @@ in
   services.openssh = {
     enable = true;
     settings = {
-      PermitRootLogin = "no";
+      # Coolify requires root SSH access to manage the server
+      PermitRootLogin = "prohibit-password";  # Allow key-based root login only
       PasswordAuthentication = false;
     };
   };
@@ -75,16 +76,21 @@ in
   # ============================================
   # USER CONFIGURATION
   # ============================================
+  # Root user - required for Coolify server management
+  users.users.root = {
+    openssh.authorizedKeys.keys = sshKeys;
+  };
+
+  # Regular user
   users.users.me = {
     isNormalUser = true;
     description = "me";
-    extraGroups = [ "wheel" "systemd-journal" "docker" "media" "video" "render" ];
+    extraGroups = [ "wheel" "systemd-journal" "docker" ];
     openssh.authorizedKeys.keys = sshKeys;
   };
 
   users.groups = {
     docker = {};
-    media = {};  # Shared group for media apps
   };
 
   security.sudo.wheelNeedsPassword = false;
@@ -105,42 +111,93 @@ in
     git            # For managing configs
     neovim         # Editor
     
-    # Docker (fallback option)
+    # Docker (required for Coolify)
     docker
     docker-compose
-    
-    # Media tools
-    ffmpeg-full    # Full ffmpeg with all codecs
-    mediainfo      # Media file analysis
-    intel-gpu-tools # For debugging Intel GPU (intel_gpu_top)
+    openssl        # For generating Coolify secrets
   ];
 
   # ============================================
-  # INTEL HARDWARE ACCELERATION (QSV for Skylake)
+  # COOLIFY (Self-hosted PaaS - Manual Installation)
   # ============================================
-  hardware.opengl = {
-    enable = true;
-    extraPackages = with pkgs; [
-      intel-media-driver    # VAAPI driver for Intel (Broadwell+)
-      intel-vaapi-driver    # Older VAAPI driver (fallback)
-      vaapiVdpau           # VDPAU backend for VAAPI
-      libvdpau-va-gl       # VDPAU driver with OpenGL/VAAPI
-    ];
-  };
-
-  # ============================================
-  # JELLYFIN (Media Server with Hardware Transcoding)
-  # ============================================
-  services.jellyfin = {
-    enable = true;
-    openFirewall = true;
-    user = "jellyfin";
-    group = "media";
-  };
+  # Following: https://coolify.io/docs/installation#manual-installation
+  # Access at: http://<server-ip>:8000
   
-  # Add jellyfin user to video/render groups for GPU access
-  users.users.jellyfin = {
-    extraGroups = [ "video" "render" ];
+  systemd.services.coolify-setup = {
+    description = "Setup and start Coolify";
+    after = [ "network-online.target" "docker.service" ];
+    wants = [ "network-online.target" ];
+    requires = [ "docker.service" ];
+    wantedBy = [ "multi-user.target" ];
+    path = [ pkgs.docker pkgs.curl pkgs.openssl pkgs.gnused pkgs.coreutils ];
+    
+    serviceConfig = {
+      Type = "oneshot";
+      RemainAfterExit = true;
+    };
+    
+    script = ''
+      set -e
+      
+      # Check if already installed
+      if [ -f "/data/coolify/source/.env" ] && docker ps | grep -q coolify; then
+        echo "Coolify already running, skipping setup..."
+        exit 0
+      fi
+      
+      echo "=== Setting up Coolify (Manual Installation) ==="
+      
+      # Step 1: Create directories
+      echo "Creating directories..."
+      mkdir -p /data/coolify/{source,ssh,applications,databases,backups,services,proxy,webhooks-during-maintenance}
+      mkdir -p /data/coolify/ssh/{keys,mux}
+      mkdir -p /data/coolify/proxy/dynamic
+      
+      # Step 2: Generate SSH key for Coolify
+      if [ ! -f "/data/coolify/ssh/keys/id.root@host.docker.internal" ]; then
+        echo "Generating SSH key..."
+        ssh-keygen -f /data/coolify/ssh/keys/id.root@host.docker.internal -t ed25519 -N "" -C root@coolify
+        cat /data/coolify/ssh/keys/id.root@host.docker.internal.pub >> /root/.ssh/authorized_keys
+        chmod 600 /root/.ssh/authorized_keys
+      fi
+      
+      # Step 3: Download configuration files
+      echo "Downloading Coolify files..."
+      curl -fsSL https://cdn.coollabs.io/coolify/docker-compose.yml -o /data/coolify/source/docker-compose.yml
+      curl -fsSL https://cdn.coollabs.io/coolify/docker-compose.prod.yml -o /data/coolify/source/docker-compose.prod.yml
+      curl -fsSL https://cdn.coollabs.io/coolify/.env.production -o /data/coolify/source/.env
+      curl -fsSL https://cdn.coollabs.io/coolify/upgrade.sh -o /data/coolify/source/upgrade.sh
+      
+      # Step 4: Set permissions
+      echo "Setting permissions..."
+      chown -R 9999:root /data/coolify
+      chmod -R 700 /data/coolify
+      
+      # Step 5: Generate secure values
+      echo "Generating secrets..."
+      sed -i "s|APP_ID=.*|APP_ID=$(openssl rand -hex 16)|g" /data/coolify/source/.env
+      sed -i "s|APP_KEY=.*|APP_KEY=base64:$(openssl rand -base64 32)|g" /data/coolify/source/.env
+      sed -i "s|DB_PASSWORD=.*|DB_PASSWORD=$(openssl rand -base64 32)|g" /data/coolify/source/.env
+      sed -i "s|REDIS_PASSWORD=.*|REDIS_PASSWORD=$(openssl rand -base64 32)|g" /data/coolify/source/.env
+      sed -i "s|PUSHER_APP_ID=.*|PUSHER_APP_ID=$(openssl rand -hex 32)|g" /data/coolify/source/.env
+      sed -i "s|PUSHER_APP_KEY=.*|PUSHER_APP_KEY=$(openssl rand -hex 32)|g" /data/coolify/source/.env
+      sed -i "s|PUSHER_APP_SECRET=.*|PUSHER_APP_SECRET=$(openssl rand -hex 32)|g" /data/coolify/source/.env
+      
+      # Step 6: Create Docker network
+      echo "Creating Docker network..."
+      docker network create --attachable coolify 2>/dev/null || true
+      
+      # Step 7: Start Coolify
+      echo "Starting Coolify..."
+      cd /data/coolify/source
+      docker compose --env-file /data/coolify/source/.env \
+        -f /data/coolify/source/docker-compose.yml \
+        -f /data/coolify/source/docker-compose.prod.yml \
+        up -d --pull always --remove-orphans --force-recreate
+      
+      echo "=== Coolify setup complete! ==="
+      echo "Access at: http://<your-server-ip>:8000"
+    '';
   };
 
   # ============================================
